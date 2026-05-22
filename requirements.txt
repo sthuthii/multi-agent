@@ -1,0 +1,35 @@
+# LLM providers
+openai>=1.30.0
+ollama>=0.2.0
+
+# Tool calling & validation
+pydantic>=2.7.0
+
+# Web search (DDG = free, no key; Tavily = better quality, free tier)
+duckduckgo-search>=6.1.0
+tavily-python>=0.3.0
+
+# Python REPL sandboxing
+RestrictedPython>=7.1
+
+# Vector store & embeddings (Phase 2+, install now so env is ready)
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+
+# HTTP & async
+httpx>=0.27.0
+aiohttp>=3.9.0
+
+# Environment & config
+python-dotenv>=1.0.0
+
+# Logging & observability
+structlog>=24.1.0
+
+# Utilities
+tenacity>=8.3.0        # retry logic for LLM calls
+tiktoken>=0.7.0        # token counting
+
+# Dev & testing
+pytest>=8.2.0
+pytest-asyncio>=0.23.0
