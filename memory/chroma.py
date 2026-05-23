@@ -160,11 +160,14 @@ class MemoryManager:
         output.sort(key=lambda x: x["score"], reverse=True)
         return output
 
-    def search_as_context(self, query: str, n_results: int = 3, min_score: float = 0.3) -> str:
+    def search_as_context(self, query: str, n_results: int = 3, min_score: float = 0.4) -> str:
         """
         Convenience method — returns memories formatted as a context string
         ready to inject into the agent's system prompt or conversation.
         Returns empty string if no relevant memories found.
+
+        min_score is set conservatively at 0.55 (cosine similarity) to avoid
+        injecting loosely-related or incorrect memories from past runs.
         """
         results = self.search(query, n_results=n_results)
         relevant = [r for r in results if r["score"] >= min_score]
@@ -172,9 +175,11 @@ class MemoryManager:
         if not relevant:
             return ""
 
-        lines = ["[Relevant memories from previous runs:]"]
+        lines = [
+            "Past interactions with this user (most relevant first):"
+        ]
         for i, r in enumerate(relevant, 1):
-            lines.append(f"  {i}. {r['text']} (relevance: {r['score']})")
+            lines.append(f"  [{i}] {r['text']}")
 
         return "\n".join(lines)
 

@@ -60,26 +60,39 @@ class ConversationBuffer:
 
     def inject_context(self, context: str):
         """
-        Inject a context string (e.g. long-term memory results) as a
-        system-level message just after the main system prompt.
-        Replaces any existing injected context to avoid duplication.
+        Inject long-term memory as a fake prior assistant turn.
+        This is the most reliable pattern for making LLMs recall past
+        conversations — presenting memory as something the assistant
+        already said, rather than a system instruction it can ignore.
         """
         if not context:
             return
-
-        # Remove previous injected context if present
+    
+        # Remove previous injected context
         self._messages = [
             m for m in self._messages
-            if not (m.role == "system" and m.content.startswith("[Memory context]"))
+            if not m.content.startswith("[Memory context]")
         ]
-
-        # Insert after system prompt (index 0), or at start if no system prompt
-        insert_at = 1 if self._messages and self._messages[0].role == "system" else 0
-        self._messages.insert(
-            insert_at,
-            Message(role="system", content=f"[Memory context]\n{context}"),
+    
+        # Insert a fake prior exchange just before the current user goal:
+        # user: "recall context" → assistant: (the memory)
+        # This makes the model believe it genuinely said these things before.
+        prior_user = Message(
+            role="user",
+            content="[Memory context] What do you remember from our previous conversations?"
         )
-
+        prior_assistant = Message(
+            role="assistant",
+            content=f"Here is what I remember from our previous conversations:\n\n{context}"
+        )
+    
+        # Insert before the last message (the current user goal)
+        if len(self._messages) >= 1:
+            self._messages.insert(-1, prior_user)
+            self._messages.insert(-1, prior_assistant)
+        else:
+            self._messages.extend([prior_user, prior_assistant])
+    
     def clear(self):
         """Reset buffer, keeping only the system prompt if present."""
         system = [m for m in self._messages if m.role == "system"]
