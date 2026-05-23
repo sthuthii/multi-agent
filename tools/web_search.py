@@ -1,11 +1,14 @@
 """
-tools/web_search.py — Web search via DuckDuckGo (no API key required).
-Swap DDG for Tavily by setting TAVILY_API_KEY in your .env — the interface
-stays identical so the agent loop doesn't change.
+tools/web_search.py — Web search via DDGS (formerly duckduckgo-search).
+
+Install: pip install ddgs
+Optional: pip install tavily-python  (better quality, free tier at tavily.com)
+
+If TAVILY_API_KEY is set in .env, Tavily is used automatically.
+Otherwise falls back to DDGS (free, no key needed).
 """
 
 import os
-
 from tools.base import BaseTool
 
 
@@ -14,35 +17,45 @@ class WebSearchTool(BaseTool):
     description = (
         "Searches the web and returns titles, URLs, and snippets for the top results. "
         "Use when you need current information, facts, recent events, documentation, "
-        "or anything you cannot compute directly."
+        "or anything you cannot compute directly. "
+        "If a search returns no results, try a shorter or different query."
     )
 
     def __init__(self, max_results: int = 5, provider: str = "auto"):
-        """
-        provider: "ddg" | "tavily" | "auto"
-            auto → uses Tavily if TAVILY_API_KEY is set, else DuckDuckGo
-        """
         self.max_results = max_results
         self.provider = provider
 
     def run(self, query: str) -> str:
         provider = self.provider
         if provider == "auto":
-            provider = "tavily" if os.getenv("TAVILY_API_KEY") else "ddg"
+            provider = "tavily" if os.getenv("TAVILY_API_KEY") else "ddgs"
 
         if provider == "tavily":
             return self._tavily(query)
-        return self._ddg(query)
+        return self._ddgs(query)
 
-    def _ddg(self, query: str) -> str:
+    def _ddgs(self, query: str) -> str:
         try:
-            from duckduckgo_search import DDGS
+            from ddgs import DDGS
+        except ImportError:
+            # fallback to old package name
+            try:
+                from duckduckgo_search import DDGS
+            except ImportError:
+                return (
+                    "Error: search package not installed. "
+                    "Run: pip install ddgs"
+                )
 
+        try:
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=self.max_results))
 
             if not results:
-                return "No results found."
+                return (
+                    f"No results found for '{query}'. "
+                    "Try a shorter or more general search query."
+                )
 
             lines = []
             for i, r in enumerate(results, 1):
@@ -53,24 +66,24 @@ class WebSearchTool(BaseTool):
                 )
             return "\n\n".join(lines)
 
-        except ImportError:
-            return (
-                "Error: duckduckgo-search not installed. "
-                "Run: pip install duckduckgo-search"
-            )
         except Exception as e:
-            return f"DuckDuckGo search error: {e}"
+            return (
+                f"Search failed: {e}. "
+                "Try a different query or use your own knowledge to answer."
+            )
 
     def _tavily(self, query: str) -> str:
         try:
             from tavily import TavilyClient
-
             client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
             response = client.search(query, max_results=self.max_results)
-
             results = response.get("results", [])
+
             if not results:
-                return "No results found."
+                return (
+                    f"No results found for '{query}'. "
+                    "Try a shorter or more general search query."
+                )
 
             lines = []
             for i, r in enumerate(results, 1):
@@ -82,12 +95,9 @@ class WebSearchTool(BaseTool):
             return "\n\n".join(lines)
 
         except ImportError:
-            return (
-                "Error: tavily-python not installed. "
-                "Run: pip install tavily-python"
-            )
+            return "Error: tavily-python not installed. Run: pip install tavily-python"
         except Exception as e:
-            return f"Tavily search error: {e}"
+            return f"Tavily search failed: {e}"
 
     def get_schema(self) -> dict:
         return {
@@ -100,7 +110,10 @@ class WebSearchTool(BaseTool):
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "The search query string.",
+                            "description": (
+                                "The search query string. "
+                                "Keep it short and specific for best results."
+                            ),
                         }
                     },
                     "required": ["query"],

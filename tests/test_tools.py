@@ -64,3 +64,75 @@ class TestWebSearchTool:
         result = self.tool.run(query="Python programming language")
         assert isinstance(result, str)
         assert len(result) > 0
+
+
+# ── Phase 2 tool tests ────────────────────────────────────────────────────────
+
+class TestCalculatorTool:
+    def setup_method(self):
+        from tools.calculator import CalculatorTool
+        self.tool = CalculatorTool()
+
+    def test_basic_arithmetic(self):
+        assert self.tool.run("2 + 2") == "4"
+        assert self.tool.run("10 - 3") == "7"
+        assert self.tool.run("6 * 7") == "42"
+        assert self.tool.run("10 / 4") == "2.5"
+
+    def test_power(self):
+        assert self.tool.run("2 ** 10") == "1024"
+
+    def test_sqrt(self):
+        assert self.tool.run("sqrt(144)") == "12"
+
+    def test_floor_div_and_mod(self):
+        assert self.tool.run("17 // 5") == "3"
+        assert self.tool.run("17 % 5") == "2"
+
+    def test_pi_constant(self):
+        result = float(self.tool.run("pi"))
+        assert abs(result - 3.14159) < 0.001
+
+    def test_zero_division(self):
+        result = self.tool.run("1 / 0")
+        assert "zero" in result.lower()
+
+    def test_disallows_dangerous_expressions(self):
+        result = self.tool.run("__import__('os').system('ls')")
+        assert "Error" in result or "not allowed" in result.lower()
+
+    def test_disallows_exec(self):
+        result = self.tool.run("exec('print(1)')")
+        assert "Error" in result
+
+    def test_schema_valid(self):
+        schema = self.tool.get_schema()
+        assert schema["function"]["name"] == "calculator"
+        assert "expression" in schema["function"]["parameters"]["properties"]
+
+
+class TestFileWriteTool:
+    def setup_method(self):
+        from tools.file_write import FileWriteTool
+        self.tool = FileWriteTool()
+
+    def test_writes_file_successfully(self):
+        result = self.tool.run("test_output.txt", "hello world")
+        assert "successfully" in result.lower()
+        assert "test_output.txt" in result
+
+    def test_returns_path_in_result(self):
+        result = self.tool.run("myfile.md", "# Title\nContent here")
+        assert "/tmp/agent_outputs/" in result
+
+    def test_sanitises_dangerous_filename(self):
+        result = self.tool.run("../../etc/passwd", "malicious")
+        assert "/tmp/agent_outputs/" in result
+        assert "etc" not in result or "passwd" not in result
+
+    def test_schema_valid(self):
+        schema = self.tool.get_schema()
+        assert schema["function"]["name"] == "file_write"
+        props = schema["function"]["parameters"]["properties"]
+        assert "filename" in props
+        assert "content" in props

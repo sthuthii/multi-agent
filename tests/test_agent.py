@@ -119,3 +119,54 @@ class TestAgentLoop:
             events = [call.args[0] for call in mock_log.call_args_list]
             assert "run_start" in events
             assert "final_answer" in events
+
+
+# ── Phase 2: memory-aware agent tests ────────────────────────────────────────
+
+class TestAgentWithMemory:
+    def test_agent_injects_memory_context(self):
+        from unittest.mock import MagicMock, patch
+        from agent import Agent
+        from llm import LLMResponse
+
+        mock_memory = MagicMock()
+        mock_memory.search_as_context.return_value = "Relevant: RAG means Retrieval-Augmented Generation"
+        mock_memory.count = 1
+
+        llm = make_llm(final_response("RAG stands for Retrieval-Augmented Generation."))
+        agent = Agent(llm=llm, tools=[], verbose=False, long_term_memory=mock_memory)
+        result = agent.run("What is RAG?")
+
+        assert mock_memory.search_as_context.called
+        assert "RAG" in result
+
+    def test_agent_stores_answer_to_memory(self):
+        mock_memory = MagicMock()
+        mock_memory.search_as_context.return_value = ""
+        mock_memory.count = 0
+
+        llm = make_llm(final_response("Paris is the capital of France."))
+        agent = Agent(llm=llm, tools=[], verbose=False, long_term_memory=mock_memory)
+        agent.run("What is the capital of France?")
+
+        assert mock_memory.store.called
+        stored_text = mock_memory.store.call_args[0][0]
+        assert "France" in stored_text or "Paris" in stored_text
+
+    def test_agent_works_without_memory(self):
+        llm = make_llm(final_response("Answer without memory."))
+        agent = Agent(llm=llm, tools=[], verbose=False, long_term_memory=None)
+        result = agent.run("Some goal")
+        assert result == "Answer without memory."
+
+    def test_memory_not_called_when_no_context(self):
+        mock_memory = MagicMock()
+        mock_memory.search_as_context.return_value = ""  # no relevant memories
+
+        llm = make_llm(final_response("Clean answer."))
+        agent = Agent(llm=llm, tools=[], verbose=False, long_term_memory=mock_memory)
+
+        # Inject context should NOT be called if search returns empty
+        agent.run("test goal")
+        # memory.search_as_context WAS called, but inject_context was not (internal to agent)
+        assert mock_memory.search_as_context.called

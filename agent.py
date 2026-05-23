@@ -1,8 +1,5 @@
 """
-agent.py — Core single-agent loop (Phase 1).
-The plan → act → observe → reflect loop lives here.
-Phase 2 will extend this with an Orchestrator that creates
-and coordinates multiple Agent instances.
+agent.py — Memory-aware single agent loop (Phase 2).
 """
 
 import uuid
@@ -10,6 +7,7 @@ from typing import Optional
 
 from llm import LLMWrapper, LLMResponse
 from memory.buffer import ConversationBuffer
+from memory.chroma import MemoryManager
 from tools.base import BaseTool
 from utils.logger import log_event
 
@@ -22,26 +20,17 @@ When given a goal:
 3. After observing the tool result, decide:
    - If you have enough to answer → reply directly in plain text (no tool call).
    - If you need more → call another tool.
-4. Never guess facts you can verify with a tool.
-5. Give a clear, concise final answer when done.
+4. If a search returns no results, try once with a shorter or different query.
+   If it fails again, answer based on your own knowledge and say so.
+5. Never guess facts you can verify with a tool.
+6. Give a clear, concise final answer when done.
 
-Important: when you are ready to give the final answer, respond with plain text ONLY.
-Do NOT call a tool just to format or summarise — write the answer directly.
+IMPORTANT: Your final answer must be plain text only.
+Do NOT start your answer with "[Called" or "[Tool" — those are internal markers.
 """
 
 
 class Agent:
-    """
-    A single ReAct-style agent.
-
-    Loop:
-      for each iteration:
-        1. PLAN  — ask LLM what to do next (tool call or final answer)
-        2. ACT   — if tool call, execute the tool
-        3. OBSERVE — append tool result to context
-        4. REFLECT — LLM decides whether to continue or answer
-    """
-
     def __init__(
         self,
         llm: LLMWrapper,
@@ -49,6 +38,9 @@ class Agent:
         max_iterations: int = 10,
         verbose: bool = True,
         save_trace: bool = False,
+        long_term_memory: Optional[MemoryManager] = None,
+        memory_top_k: int = 3,
+        memory_min_score: float = 0.3,
     ):
         self.llm = llm
         self.tools: dict[str, BaseTool] = {t.name: t for t in tools}
@@ -56,17 +48,19 @@ class Agent:
         self.max_iterations = max_iterations
         self.verbose = verbose
         self.save_trace = save_trace
+        self.long_term_memory = long_term_memory
+        self.memory_top_k = memory_top_k
+        self.memory_min_score = memory_min_score
 
-        # Set per run
         self.run_id: str = ""
         self.iteration_count: int = 0
         self.memory: ConversationBuffer = ConversationBuffer()
 
-    # ── Public ───────────────────────────────────────────────────────────────
+    # ── Public ────────────────────────────────────────────────────────────────
 
     def run(self, goal: str) -> str:
-        """Execute the agent loop for a given goal. Returns the final answer."""
         self._reset(goal)
+        self._inject_long_term_memory(goal)
 
         for i in range(self.max_iterations):
             self.iteration_count = i + 1
@@ -78,23 +72,51 @@ class Agent:
             )
 
             if response.wants_tool:
-                self._handle_tool_call(response, i)
+                self._handle_tool_call(response)
             else:
-                return self._handle_final_answer(response)
+                return self._handle_final_answer(response, goal)
 
         return self._handle_max_iterations()
 
-    # ── Private — loop steps ─────────────────────────────────────────────────
+    # ── Memory ────────────────────────────────────────────────────────────────
 
-    def _handle_tool_call(self, response: LLMResponse, iteration: int):
-        """ACT + OBSERVE."""
+    def _inject_long_term_memory(self, goal: str):
+        if self.long_term_memory is None:
+            return
+        context = self.long_term_memory.search_as_context(
+            query=goal,
+            n_results=self.memory_top_k,
+            min_score=self.memory_min_score,
+        )
+        if context:
+            self.memory.inject_context(context)
+            self._print(f"[memory] Injected relevant memories.")
+            self._log("memory_injected", {"context_preview": context[:200]})
+
+    def _store_to_long_term_memory(self, goal: str, answer: str):
+        if self.long_term_memory is None:
+            return
+        memory_text = f"Goal: {goal[:200]}\nAnswer: {answer[:400]}"
+        doc_id = self.long_term_memory.store(
+            text=memory_text,
+            metadata={"run_id": self.run_id, "type": "qa_pair"},
+        )
+        self._print(f"[memory] Stored answer to long-term memory (id={doc_id}).")
+        self._log("memory_stored", {"doc_id": doc_id})
+
+    # ── Loop steps ────────────────────────────────────────────────────────────
+
+    def _handle_tool_call(self, response: LLMResponse):
         tool_name = response.tool_name
         tool_args = response.tool_args or {}
 
         self._print(f"[iter {self.iteration_count}] → {tool_name}({tool_args})")
-        self._log("tool_call", {"iteration": self.iteration_count, "tool": tool_name, "args": tool_args})
+        self._log("tool_call", {
+            "iteration": self.iteration_count,
+            "tool": tool_name,
+            "args": tool_args,
+        })
 
-        # ACT
         if tool_name not in self.tools:
             tool_result = f"Error: unknown tool '{tool_name}'. Available: {list(self.tools)}"
         else:
@@ -107,17 +129,34 @@ class Agent:
 
         preview = tool_result[:300] + ("..." if len(tool_result) > 300 else "")
         self._print(f"[iter {self.iteration_count}] ← {preview}")
-        self._log("tool_result", {"iteration": self.iteration_count, "tool": tool_name, "result": tool_result})
+        self._log("tool_result", {
+            "iteration": self.iteration_count,
+            "tool": tool_name,
+            "result": tool_result,
+        })
 
-        # OBSERVE — feed result back into context
         self.memory.add("assistant", f"[Called {tool_name} with args: {tool_args}]")
         self.memory.add("user", f"[Tool result from {tool_name}]:\n{tool_result}")
 
-    def _handle_final_answer(self, response: LLMResponse) -> str:
-        """REFLECT — LLM produced a final answer."""
+    def _handle_final_answer(self, response: LLMResponse, goal: str) -> str:
         answer = response.content or "(empty response)"
+
+        # Guard: LLM sometimes echoes its own tool-call string as the answer.
+        # This happens when search repeatedly fails and the model gives up.
+        # Detect and ask it to try again with one plain-text prompt.
+        if answer.strip().startswith("[Called ") or answer.strip().startswith("[Tool result"):
+            self._print(f"[iter {self.iteration_count}] ⚠ Caught tool-echo, requesting plain answer...")
+            self.memory.add(
+                "user",
+                "Please provide your final answer in plain text. "
+                "Do not repeat a tool call — just answer based on what you know."
+            )
+            retry = self.llm.chat(messages=self.memory.get())
+            answer = retry.content or "(no answer produced)"
+
         self._print(f"\n✓ Done in {self.iteration_count} iteration(s).\n")
         self._log("final_answer", {"answer": answer, "iterations": self.iteration_count})
+        self._store_to_long_term_memory(goal, answer)
         return answer
 
     def _handle_max_iterations(self) -> str:
@@ -128,7 +167,7 @@ class Agent:
         self._log("max_iterations_reached", {"limit": self.max_iterations})
         return msg
 
-    # ── Private — helpers ─────────────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _reset(self, goal: str):
         self.run_id = str(uuid.uuid4())[:8]
@@ -138,7 +177,12 @@ class Agent:
         self.memory.add("user", goal)
         self._print(f"\n{'='*60}")
         self._print(f"GOAL: {goal}")
-        self._print(f"run_id={self.run_id}  max_iter={self.max_iterations}  tools={list(self.tools)}")
+        self._print(
+            f"run_id={self.run_id}  "
+            f"max_iter={self.max_iterations}  "
+            f"tools={list(self.tools)}  "
+            f"ltm={'on' if self.long_term_memory else 'off'}"
+        )
         self._print(f"{'='*60}")
         self._log("run_start", {"goal": goal})
 
@@ -153,5 +197,6 @@ class Agent:
     def __repr__(self):
         return (
             f"<Agent llm={self.llm} tools={list(self.tools)} "
-            f"max_iter={self.max_iterations}>"
+            f"max_iter={self.max_iterations} "
+            f"ltm={'on' if self.long_term_memory else 'off'}>"
         )

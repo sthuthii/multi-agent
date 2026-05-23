@@ -6,7 +6,7 @@ ollama>=0.2.0
 pydantic>=2.7.0
 
 # Web search (DDG = free, no key; Tavily = better quality, free tier)
-duckduckgo-search>=6.1.0
+ddgs>=0.1.0
 tavily-python>=0.3.0
 
 # Python REPL sandboxing
@@ -33,3 +33,7 @@ tiktoken>=0.7.0        # token counting
 # Dev & testing
 pytest>=8.2.0
 pytest-asyncio>=0.23.0
+
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+groq>=0.1.0
