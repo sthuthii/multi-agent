@@ -18,10 +18,11 @@ Rules:
 1. Use tools to answer — call web_search for facts, python_repl for computation, calculator for math.
 2. After seeing a tool result, give your final answer in plain text.
 3. If search returns off-topic results, retry with a more specific query including domain keywords.
-4. If the conversation contains prior exchanges about past interactions, use them to answer recall questions.
-5. For questions like "what did I ask before?" — look at the conversation history above and answer directly. No tools needed.
+"4. If context from previous conversations is provided, use it to answer recall questions"
+"   like \"what did I ask before?\" or \"what did we discuss?\".",
+5. When answering recall questions, quote the user's previous question directly from memory.
 
-Your final answer must be plain text. Never output JSON, XML, or function call syntax as your answer.
+Your final answer must be plain text. Never output JSON, XML, or function call syntax.
 """
 
 
@@ -125,14 +126,14 @@ class Agent:
         if self.long_term_memory is None:
             return
         memory_text = (
-            f"User asked: {goal[:200]}\n"
-            f"Agent answered: {answer[:400]}"
+            f"The user previously asked: \"{goal[:200]}\"\n"
+            f"The agent answered: \"{answer[:400]}\""
         )
         doc_id = self.long_term_memory.store(
             text=memory_text,
             metadata={"run_id": self.run_id, "type": "qa_pair"},
         )
-        self._print(f"[memory] Stored answer to long-term memory (id={doc_id}).")
+        self._print(f"[memory] Stored to long-term memory (id={doc_id}).")
         self._log("memory_stored", {"doc_id": doc_id})
 
     # ─────────────────────────────────────────────

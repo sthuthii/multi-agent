@@ -1,18 +1,14 @@
 """
-main.py — Phase 2 entry point.
+main.py — Phase 3 entry point.
 
-New in Phase 2:
-  --memory          enables long-term ChromaDB memory
-  --memory-dir      where ChromaDB persists data (default: .chroma)
-  --memory-agent    agent namespace for memory (default: "default")
-  --clear-memory    wipe the agent's memory before running
-  --no-calc         disable calculator tool
-  --no-filewrite    disable file write tool
+Single agent mode (default):
+  python main.py --goal "..."
 
-Usage:
-  python main.py                                      # Groq, no memory
-  python main.py --memory                             # enable long-term memory
-  python main.py --memory --goal "What is RAG?"       # memory + custom goal
+Multi-agent orchestrator mode (Phase 3):
+  python main.py --orchestrator --goal "..."
+
+Provider options:
+  python main.py --provider groq --model llama-3.3-70b-versatile
   python main.py --provider ollama --model mistral
   python main.py --list-models
 """
@@ -30,77 +26,77 @@ from tools.base import BaseTool
 
 load_dotenv()
 
+# ── Default goals ─────────────────────────────────────────────────────────────
 
-# ── Default eval goals ────────────────────────────────────────────────────────
-
-DEFAULT_GOALS = [
+DEFAULT_SINGLE_GOALS = [
     "What is the square root of 1764? Use the calculator tool.",
-    "Search for what RAG stands for in the context of LLMs, then summarise it in 2 sentences.",
+    "Search for what Retrieval-Augmented Generation (RAG) means in the context of LLMs and AI, then summarise it in 2 sentences.",
     "Write Python code that generates the first 10 Fibonacci numbers, then save the code to a file called fibonacci.py.",
-    "Search for the creator of the Python programming language.",
+    "Search for who created the Python programming language and what year it was released.",
     "Run this broken code and tell me the exact error: x = 1 / 0",
 ]
 
+DEFAULT_ORCHESTRATOR_GOAL = (
+    "Research what gradient descent is in machine learning and "
+    "write a simple Python implementation of it."
+)
+
 MODEL_REFERENCE = {
     "groq": [
-        ("llama-3.1-8b-instant",    "Fastest — best for development & testing"),
-        ("llama-3.3-70b-versatile", "Best quality — use for evals & demos"),
+        ("llama-3.1-8b-instant",    "Fastest — good for sub-agents"),
+        ("llama-3.3-70b-versatile", "Best quality — use for orchestrator"),
         ("mixtral-8x7b-32768",      "Long context (32k tokens)"),
         ("gemma2-9b-it",            "Lightweight alternative"),
     ],
     "ollama": [
         ("mistral",  "7B — good tool calling, fast"),
         ("qwen2.5",  "Strong at coding tasks"),
-        ("llama3.2", "3B — very fast, lighter reasoning"),
-        ("llama3.1", "8B — closest to GPT-4o-mini behaviour"),
+        ("llama3.2", "3B — very fast"),
+        ("llama3.1", "8B — closest to GPT-4o-mini"),
     ],
     "openai": [
-        ("gpt-4o-mini", "Fast, cheap, reliable tool calling"),
-        ("gpt-4o",      "Best quality, higher cost"),
+        ("gpt-4o-mini", "Fast, cheap, reliable"),
+        ("gpt-4o",      "Best quality"),
     ],
 }
-
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Phase 2 — Memory-aware Single Agent",
+        description="Multi-Agent System — Phase 3",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    # Core
     p.add_argument("--goal",     type=str, default=None,
-                   help="Goal for the agent. Runs default suite if omitted.")
+                   help="Goal for the agent.")
     p.add_argument("--provider", type=str, default="groq",
                    choices=["groq", "openai", "ollama"],
-                   help="LLM provider (default: groq — free at console.groq.com)")
+                   help="LLM provider (default: groq)")
     p.add_argument("--model",    type=str, default=None,
                    help="Model name. Run --list-models to see options.")
+    p.add_argument("--agent-model", type=str, default=None,
+                   help="Model for sub-agents in orchestrator mode (default: llama-3.1-8b-instant).")
     p.add_argument("--list-models", action="store_true",
                    help="Print available models and exit.")
     p.add_argument("--max-iter", type=int, default=10,
                    help="Max agent iterations per goal (default: 10)")
-
-    # Phase 2: memory flags
+    p.add_argument("--orchestrator", action="store_true",
+                   help="Use multi-agent orchestrator (Phase 3)")
     p.add_argument("--memory",       action="store_true",
-                   help="Enable long-term ChromaDB memory (Phase 2)")
+                   help="Enable long-term ChromaDB memory")
     p.add_argument("--memory-dir",   type=str, default=".chroma",
                    help="Directory for ChromaDB persistence (default: .chroma)")
     p.add_argument("--memory-agent", type=str, default="default",
                    help="Agent namespace for memory (default: 'default')")
     p.add_argument("--clear-memory", action="store_true",
                    help="Wipe agent memory before running")
-
-    # Tool toggles
     p.add_argument("--no-search",    action="store_true", help="Disable web search")
     p.add_argument("--no-repl",      action="store_true", help="Disable Python REPL")
     p.add_argument("--no-calc",      action="store_true", help="Disable calculator")
     p.add_argument("--no-filewrite", action="store_true", help="Disable file write")
-
-    # Output
-    p.add_argument("--save-trace", action="store_true",
+    p.add_argument("--save-trace",   action="store_true",
                    help="Save run trace to logs/trace.jsonl")
-    p.add_argument("--quiet",      action="store_true",
+    p.add_argument("--quiet",        action="store_true",
                    help="Suppress per-iteration logs")
     return p.parse_args()
 
@@ -114,8 +110,8 @@ def list_models():
             default = " (default)" if name == PROVIDER_DEFAULTS.get(provider) else ""
             print(f"    --model {name:<34} {desc}{default}")
         print()
-    print("Groq signup (free, no credit card): https://console.groq.com")
-    print("Ollama install (local):             https://ollama.com\n")
+    print("Groq signup (free): https://console.groq.com")
+    print("Ollama install:     https://ollama.com\n")
 
 
 def build_tools(args: argparse.Namespace) -> list[BaseTool]:
@@ -134,16 +130,10 @@ def build_tools(args: argparse.Namespace) -> list[BaseTool]:
 def build_memory(args: argparse.Namespace) -> MemoryManager | None:
     if not args.memory:
         return None
-
-    mem = MemoryManager(
-        agent_name=args.memory_agent,
-        persist_dir=args.memory_dir,
-    )
-
+    mem = MemoryManager(agent_name=args.memory_agent, persist_dir=args.memory_dir)
     if args.clear_memory:
         mem.clear()
         print(f"[memory] Cleared memory for agent '{args.memory_agent}'.")
-
     print(f"[memory] Long-term memory ON  (namespace={args.memory_agent}, dir={args.memory_dir})")
     return mem
 
@@ -154,7 +144,6 @@ def run_goals(agent: Agent, goals: list[str]):
         answer = agent.run(goal)
         print(f"\nANSWER:\n{answer}")
         print(f"(iterations used: {agent.iteration_count})")
-
     print(f"\n{'='*60}")
     print(f"Completed {len(goals)} goal(s).")
     if agent.save_trace:
@@ -172,11 +161,6 @@ def main():
         list_models()
         sys.exit(0)
 
-    tools = build_tools(args)
-    if not tools:
-        print("Error: at least one tool must be enabled.")
-        sys.exit(1)
-
     try:
         llm = LLMWrapper(provider=args.provider, model=args.model)
     except (EnvironmentError, ImportError) as e:
@@ -184,21 +168,45 @@ def main():
         sys.exit(1)
 
     long_term_memory = build_memory(args)
-
     print(f"\nUsing: {llm}")
-    print(f"Tools: {[t.name for t in tools]}")
 
-    agent = Agent(
-        llm=llm,
-        tools=tools,
-        max_iterations=args.max_iter,
-        verbose=not args.quiet,
-        save_trace=args.save_trace,
-        long_term_memory=long_term_memory,
-    )
+    if args.orchestrator:
+        from orchestrator import Orchestrator
 
-    goals = [args.goal] if args.goal else DEFAULT_GOALS
-    run_goals(agent, goals)
+        # Use a fast model for sub-agents to avoid token limits
+        agent_model = args.agent_model or "llama-3.1-8b-instant"
+        agent_llm = LLMWrapper(provider=args.provider, model=agent_model)
+
+        print(f"Mode:       Orchestrator (multi-agent)")
+        print(f"Sub-agents: {agent_llm}")
+
+        runner = Orchestrator(
+            llm=llm,
+            agent_llm=agent_llm,
+            verbose=not args.quiet,
+            save_trace=args.save_trace,
+            long_term_memory=long_term_memory,
+        )
+        goal = args.goal or DEFAULT_ORCHESTRATOR_GOAL
+        runner.run(goal)
+
+    else:
+        tools = build_tools(args)
+        if not tools:
+            print("Error: at least one tool must be enabled.")
+            sys.exit(1)
+        print(f"Tools: {[t.name for t in tools]}")
+
+        agent = Agent(
+            llm=llm,
+            tools=tools,
+            max_iterations=args.max_iter,
+            verbose=not args.quiet,
+            save_trace=args.save_trace,
+            long_term_memory=long_term_memory,
+        )
+        goals = [args.goal] if args.goal else DEFAULT_SINGLE_GOALS
+        run_goals(agent, goals)
 
 
 if __name__ == "__main__":

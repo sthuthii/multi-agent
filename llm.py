@@ -21,17 +21,15 @@ from typing import Any, Optional
 @dataclass
 class LLMResponse:
     """Normalised response from any LLM provider."""
-    content: Optional[str]      # Final text answer (None if tool call)
-    tool_name: Optional[str]    # Tool the LLM wants to call
-    tool_args: Optional[dict]   # Arguments for the tool call
-    raw: Any = None             # Original API response (for debugging)
+    content: Optional[str]
+    tool_name: Optional[str]
+    tool_args: Optional[dict]
+    raw: Any = None
 
     @property
     def wants_tool(self) -> bool:
         return self.tool_name is not None
 
-
-# ── Provider defaults ─────────────────────────────────────────────────────────
 
 PROVIDER_DEFAULTS = {
     "openai": "gpt-4o-mini",
@@ -40,22 +38,14 @@ PROVIDER_DEFAULTS = {
 }
 
 GROQ_MODELS = {
-    "llama-3.1-8b-instant",     # fastest, good tool calling
-    "llama-3.3-70b-versatile",  # best quality on free tier
-    "mixtral-8x7b-32768",       # long context
-    "gemma2-9b-it",             # lightweight
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
 }
 
 
 class LLMWrapper:
-    """
-    Unified wrapper around OpenAI, Groq, and Ollama APIs.
-    The chat() interface is identical for all three providers.
-
-    Groq tip: use llama-3.1-8b-instant for speed during development,
-    llama-3.3-70b-versatile for evals and demos.
-    """
-
     OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
     def __init__(
@@ -70,7 +60,6 @@ class LLMWrapper:
                 f"Unknown provider '{provider}'. "
                 f"Choose from: {list(PROVIDER_DEFAULTS)}"
             )
-
         self.provider = provider
         self.model = model or PROVIDER_DEFAULTS[provider]
         self.temperature = temperature
@@ -81,9 +70,7 @@ class LLMWrapper:
             try:
                 from groq import Groq
             except ImportError:
-                raise ImportError(
-                    "groq package not installed. Run: pip install groq"
-                )
+                raise ImportError("groq package not installed. Run: pip install groq")
             api_key = os.getenv("GROQ_API_KEY")
             if not api_key:
                 raise EnvironmentError(
@@ -99,23 +86,17 @@ class LLMWrapper:
             try:
                 from openai import OpenAI
             except ImportError:
-                raise ImportError(
-                    "openai package not installed. Run: pip install openai"
-                )
+                raise ImportError("openai package not installed. Run: pip install openai")
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key:
-                raise EnvironmentError(
-                    "OPENAI_API_KEY is not set. Add it to your .env file."
-                )
+                raise EnvironmentError("OPENAI_API_KEY is not set. Add it to your .env file.")
             return OpenAI(api_key=api_key)
 
         elif provider == "ollama":
             try:
                 from openai import OpenAI
             except ImportError:
-                raise ImportError(
-                    "openai package not installed. Run: pip install openai"
-                )
+                raise ImportError("openai package not installed. Run: pip install openai")
             return OpenAI(
                 api_key="ollama",
                 base_url=base_url or self.OLLAMA_BASE_URL,
@@ -126,10 +107,6 @@ class LLMWrapper:
         messages: list[dict],
         tools: Optional[list[dict]] = None,
     ) -> LLMResponse:
-        """
-        Send messages to the LLM and return a normalised LLMResponse.
-        Works identically across all three providers.
-        """
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -140,7 +117,18 @@ class LLMWrapper:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        response = self.client.chat.completions.create(**kwargs)
+        try:
+            response = self.client.chat.completions.create(**kwargs)
+        except Exception as e:
+            error_str = str(e)
+            # Groq sometimes rejects tool schemas — retry without tools
+            if "tool_use_failed" in error_str or "400" in error_str:
+                kwargs.pop("tools", None)
+                kwargs.pop("tool_choice", None)
+                response = self.client.chat.completions.create(**kwargs)
+            else:
+                raise
+
         msg = response.choices[0].message
 
         if msg.tool_calls:
@@ -149,7 +137,6 @@ class LLMWrapper:
                 args = json.loads(tc.function.arguments)
             except json.JSONDecodeError:
                 args = {"raw": tc.function.arguments}
-
             return LLMResponse(
                 content=None,
                 tool_name=tc.function.name,
