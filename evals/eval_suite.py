@@ -1,11 +1,13 @@
 """
-evals/eval_suite.py — Phase 1 eval suite.
-Runs 20 goals against a real LLM and reports pass/fail + metrics.
-Results are saved to evals/results.json.
+evals/eval_suite.py — Phase 5 eval suite.
+
+Tests both single-agent and orchestrator modes.
+Saves results to evals/results.json.
 
 Usage:
   python evals/eval_suite.py
-  python evals/eval_suite.py --provider ollama --model mistral
+  python evals/eval_suite.py --provider groq --model llama-3.3-70b-versatile
+  python evals/eval_suite.py --mode orchestrator
 """
 
 import argparse
@@ -14,7 +16,6 @@ import sys
 import time
 from pathlib import Path
 
-# Allow running from project root
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
@@ -22,140 +23,226 @@ load_dotenv()
 
 from agent import Agent
 from llm import LLMWrapper
-from tools import PythonREPL, WebSearchTool
+from orchestrator import Orchestrator
+from tools import PythonREPL, WebSearchTool, CalculatorTool, FileWriteTool
 
 
-EVAL_GOALS = [
-    # ── Computation (REPL) ─────────────────────────────────────────────────
-    {"id": 1,  "goal": "What is the square root of 1764? Use Python to verify.",
+# ── Eval goals ────────────────────────────────────────────────────────────────
+
+SINGLE_AGENT_GOALS = [
+    # Computation
+    {"id": 1,  "goal": "What is the square root of 1764? Use the calculator.",
                "must_contain": ["42"]},
-    {"id": 2,  "goal": "Write Python to check if 97 is a prime number and print the result.",
-               "must_contain": ["prime", "97"]},
-    {"id": 3,  "goal": "Generate the first 10 Fibonacci numbers using Python and print them.",
-               "must_contain": ["55"]},  # 10th Fibonacci number
-    {"id": 4,  "goal": "How many days are in 17 weeks? Compute with Python.",
+    {"id": 2,  "goal": "Write Python to check if 97 is prime and print the result.",
+               "must_contain": ["prime"]},
+    {"id": 3,  "goal": "Generate the first 10 Fibonacci numbers using Python.",
+               "must_contain": ["55"]},
+    {"id": 4,  "goal": "How many days are in 17 weeks? Use the calculator.",
                "must_contain": ["119"]},
     {"id": 5,  "goal": "Use Python to reverse the string 'intelligence' and print it.",
                "must_contain": ["ecnegilletni"]},
 
-    # ── Web search ─────────────────────────────────────────────────────────
-    {"id": 6,  "goal": "What does RAG stand for in the context of LLMs?",
+    # Web search
+    {"id": 6,  "goal": "What does Retrieval-Augmented Generation (RAG) stand for in AI?",
                "must_contain": ["retrieval"]},
     {"id": 7,  "goal": "Who created the Python programming language?",
-               "must_contain": ["Guido"]},
-    {"id": 8,  "goal": "What is the Hugging Face Transformers library used for?",
-               "must_contain": []},  # manual review
-    {"id": 9,  "goal": "What is ChromaDB?",
+               "must_contain": ["guido"]},
+    {"id": 8,  "goal": "What is ChromaDB used for in AI applications?",
                "must_contain": ["vector"]},
-    {"id": 10, "goal": "What year was the Transformer architecture introduced in 'Attention Is All You Need'?",
+    {"id": 9,  "goal": "What year was the Transformer paper 'Attention Is All You Need' published?",
                "must_contain": ["2017"]},
+    {"id": 10, "goal": "What is the difference between fine-tuning and prompt engineering in LLMs?",
+               "must_contain": []},  # manual
 
-    # ── Multi-step (search + compute) ──────────────────────────────────────
-    {"id": 11, "goal": "Search for what LangChain is, then write Python to count the characters in the word 'LangChain'.",
-               "must_contain": ["9"]},
-    {"id": 12, "goal": "Find out what DPO stands for in LLM fine-tuning and summarise it in 1 sentence.",
-               "must_contain": ["preference"]},
+    # Error resilience
+    {"id": 11, "goal": "Run this broken code and tell me the error: x = 1 / 0",
+               "must_contain": ["zerodivision"]},
+    {"id": 12, "goal": "Run this and tell me the error: print('hello'",
+               "must_contain": ["syntaxerror", "eof", "parenthes"]},
+    {"id": 13, "goal": "Try to import 'nonexistentlib999' and tell me what happens.",
+               "must_contain": ["modulenotfounderror", "no module"]},
 
-    # ── Error resilience ───────────────────────────────────────────────────
-    {"id": 13, "goal": "Run this broken code and tell me the exact error type: x = 1 / 0",
-               "must_contain": ["ZeroDivision"]},
-    {"id": 14, "goal": "Run this broken code and tell me the error: print('hello'",
-               "must_contain": ["SyntaxError", "EOF", "parenthes"]},
-    {"id": 15, "goal": "Try to import a library called 'nonexistentlib123' and tell me what happens.",
-               "must_contain": ["ModuleNotFoundError", "No module"]},
+    # Multi-step
+    {"id": 14, "goal": "Search for what FAISS is, then write Python to create a simple list and sort it.",
+               "must_contain": ["faiss"]},
+    {"id": 15, "goal": "What is gradient descent? Explain in 2 sentences.",
+               "must_contain": ["gradient", "loss"]},
+]
 
-    # ── Factual (direct answer, no tool needed) ────────────────────────────
-    {"id": 16, "goal": "What does API stand for?",
-               "must_contain": ["Application Programming Interface"]},
-    {"id": 17, "goal": "What is the time complexity of binary search?",
-               "must_contain": ["O(log"]},
-
-    # ── Compound ───────────────────────────────────────────────────────────
-    {"id": 18, "goal": "Find the latest version of the 'requests' Python library and then write code that prints the version string.",
-               "must_contain": []},  # manual review
-    {"id": 19, "goal": "Search for what FAISS is and then compute: if FAISS can search 1 million vectors in 10ms, how many per second? Use Python.",
-               "must_contain": ["100000000", "100,000,000", "1e8", "100M"]},
-    {"id": 20, "goal": "Explain what a vector embedding is in 2 sentences.",
-               "must_contain": []},  # manual review
+ORCHESTRATOR_GOALS = [
+    {"id": 16, "goal": "Research what a transformer neural network is and write a Python class skeleton for one.",
+               "must_contain": ["attention", "class"]},
+    {"id": 17, "goal": "Research what vector embeddings are and write Python code to compute cosine similarity between two vectors.",
+               "must_contain": ["cosine", "def"]},
+    {"id": 18, "goal": "Research the difference between LSTM and Transformer architectures.",
+               "must_contain": ["lstm", "transformer"]},
+    {"id": 19, "goal": "Research what fine-tuning a language model means and write a Python pseudocode example.",
+               "must_contain": ["fine-tun", "def"]},
+    {"id": 20, "goal": "Research what tokenization is in NLP and write Python code to tokenize a sentence.",
+               "must_contain": ["token", "split"]},
 ]
 
 
-def run_evals(provider: str = "openai", model: str = "gpt-4o-mini", max_iter: int = 8):
+# ── Eval runner ───────────────────────────────────────────────────────────────
+
+def run_single_agent_evals(
+    provider: str, model: str, max_iter: int
+) -> list[dict]:
     llm = LLMWrapper(provider=provider, model=model)
     agent = Agent(
         llm=llm,
-        tools=[PythonREPL(), WebSearchTool()],
+        tools=[PythonREPL(), WebSearchTool(), CalculatorTool(), FileWriteTool()],
         max_iterations=max_iter,
         verbose=False,
         save_trace=True,
     )
 
     results = []
-    passed = 0
-    total_iterations = 0
+    print(f"\n── Single-agent evals ({len(SINGLE_AGENT_GOALS)} goals) ──")
 
-    print(f"\nRunning Phase 1 eval suite ({len(EVAL_GOALS)} goals)")
-    print(f"Provider: {provider}  Model: {model}  max_iter: {max_iter}")
-    print("=" * 60)
-
-    for case in EVAL_GOALS:
+    for case in SINGLE_AGENT_GOALS:
         start = time.time()
         try:
             answer = agent.run(case["goal"])
             elapsed = round(time.time() - start, 2)
-            iterations = agent.iteration_count
             crashed = False
         except Exception as e:
             answer = f"CRASHED: {e}"
             elapsed = round(time.time() - start, 2)
-            iterations = agent.iteration_count
             crashed = True
 
-        must_contain = case.get("must_contain", [])
-        if must_contain:
-            passed_case = all(kw.lower() in answer.lower() for kw in must_contain)
+        must = case.get("must_contain", [])
+        if must:
+            passed = all(kw.lower() in answer.lower() for kw in must)
         else:
-            passed_case = None  # manual review required
+            passed = None  # manual review
 
-        total_iterations += iterations
-        if passed_case is True:
-            passed += 1
-
-        status = "PASS" if passed_case is True else ("MANUAL" if passed_case is None else "FAIL")
-        print(f"[{status:6}] #{case['id']:2} ({iterations} iter, {elapsed}s): {case['goal'][:55]}")
-        if passed_case is False:
-            print(f"         Answer: {answer[:120]}")
+        status = "PASS" if passed is True else ("MANUAL" if passed is None else "FAIL")
+        print(f"  [{status:6}] #{case['id']:2} ({agent.iteration_count} iter, {elapsed}s): {case['goal'][:55]}")
+        if passed is False:
+            print(f"           Answer: {answer[:100]}")
 
         results.append({
             "id": case["id"],
+            "mode": "single",
             "goal": case["goal"],
             "answer": answer,
-            "passed": passed_case,
+            "passed": passed,
             "crashed": crashed,
-            "iterations": iterations,
+            "iterations": agent.iteration_count,
             "elapsed_s": elapsed,
         })
 
-    auto_graded = [r for r in results if r["passed"] is not None]
+    return results
+
+
+def run_orchestrator_evals(
+    provider: str, model: str, agent_model: str
+) -> list[dict]:
+    llm = LLMWrapper(provider=provider, model=model)
+    agent_llm = LLMWrapper(provider=provider, model=agent_model)
+    orch = Orchestrator(
+        llm=llm,
+        agent_llm=agent_llm,
+        verbose=False,
+        save_trace=True,
+        max_retries=1,
+    )
+
+    results = []
+    print(f"\n── Orchestrator evals ({len(ORCHESTRATOR_GOALS)} goals) ──")
+
+    for case in ORCHESTRATOR_GOALS:
+        start = time.time()
+        try:
+            answer = orch.run(case["goal"])
+            elapsed = round(time.time() - start, 2)
+            crashed = False
+        except Exception as e:
+            answer = f"CRASHED: {e}"
+            elapsed = round(time.time() - start, 2)
+            crashed = True
+
+        must = case.get("must_contain", [])
+        if must:
+            passed = all(kw.lower() in answer.lower() for kw in must)
+        else:
+            passed = None
+
+        status = "PASS" if passed is True else ("MANUAL" if passed is None else "FAIL")
+        print(f"  [{status:6}] #{case['id']:2} ({elapsed}s): {case['goal'][:55]}")
+        if passed is False:
+            print(f"           Answer: {answer[:100]}")
+
+        results.append({
+            "id": case["id"],
+            "mode": "orchestrator",
+            "goal": case["goal"],
+            "answer": answer,
+            "passed": passed,
+            "crashed": crashed,
+            "elapsed_s": elapsed,
+        })
+
+    return results
+
+
+def print_summary(results: list[dict]):
+    auto = [r for r in results if r["passed"] is not None]
     manual = [r for r in results if r["passed"] is None]
+    passed = sum(1 for r in auto if r["passed"])
+    crashed = sum(1 for r in results if r["crashed"])
+    avg_elapsed = sum(r["elapsed_s"] for r in results) / len(results)
 
-    print("\n" + "=" * 60)
-    print(f"Auto-graded:  {passed}/{len(auto_graded)} passed")
+    print(f"\n{'='*60}")
+    print(f"EVAL RESULTS")
+    print(f"{'='*60}")
+    print(f"Auto-graded : {passed}/{len(auto)} passed")
     print(f"Manual review needed: {len(manual)} goals")
-    print(f"Avg iterations/goal: {total_iterations / len(EVAL_GOALS):.1f}")
-    print(f"Crash rate: {sum(r['crashed'] for r in results)}/{len(results)}")
+    print(f"Crash rate  : {crashed}/{len(results)}")
+    print(f"Avg latency : {avg_elapsed:.1f}s per goal")
 
-    out_path = Path("evals/results.json")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w") as f:
-        json.dump(results, f, indent=2)
-    print(f"\nResults saved → {out_path}")
+    single = [r for r in results if r["mode"] == "single"]
+    orch = [r for r in results if r["mode"] == "orchestrator"]
+    if single:
+        s_auto = [r for r in single if r["passed"] is not None]
+        s_pass = sum(1 for r in s_auto if r["passed"])
+        print(f"\nSingle-agent: {s_pass}/{len(s_auto)} auto-graded passed")
+    if orch:
+        o_auto = [r for r in orch if r["passed"] is not None]
+        o_pass = sum(1 for r in o_auto if r["passed"])
+        print(f"Orchestrator: {o_pass}/{len(o_auto)} auto-graded passed")
+
+
+def main():
+    p = argparse.ArgumentParser(description="Phase 5 Eval Suite")
+    p.add_argument("--provider",    default="groq",    choices=["groq", "openai", "ollama"])
+    p.add_argument("--model",       default="llama-3.3-70b-versatile")
+    p.add_argument("--agent-model", default="llama-3.1-8b-instant")
+    p.add_argument("--max-iter",    type=int, default=8)
+    p.add_argument("--mode",        default="both", choices=["single", "orchestrator", "both"])
+    args = p.parse_args()
+
+    print(f"Provider : {args.provider}")
+    print(f"Model    : {args.model}")
+    print(f"Mode     : {args.mode}")
+
+    all_results = []
+
+    if args.mode in ("single", "both"):
+        all_results += run_single_agent_evals(args.provider, args.model, args.max_iter)
+
+    if args.mode in ("orchestrator", "both"):
+        all_results += run_orchestrator_evals(args.provider, args.model, args.agent_model)
+
+    print_summary(all_results)
+
+    out = Path("evals/results.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w") as f:
+        json.dump(all_results, f, indent=2)
+    print(f"\nResults saved → {out}")
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--provider", default="openai", choices=["openai", "ollama"])
-    p.add_argument("--model",    default="gpt-4o-mini")
-    p.add_argument("--max-iter", type=int, default=8)
-    args = p.parse_args()
-    run_evals(args.provider, args.model, args.max_iter)
+    main()

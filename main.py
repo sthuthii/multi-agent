@@ -98,6 +98,8 @@ def parse_args() -> argparse.Namespace:
                    help="Save run trace to logs/trace.jsonl")
     p.add_argument("--quiet",        action="store_true",
                    help="Suppress per-iteration logs")
+    p.add_argument("--trace", action="store_true",
+               help="Replay and print all run traces from logs/trace.jsonl")
     return p.parse_args()
 
 
@@ -156,6 +158,10 @@ def run_goals(agent: Agent, goals: list[str]):
 
 def main():
     args = parse_args()
+    if args.trace:
+        from observability.dashboard import print_all_runs
+        print_all_runs()
+        sys.exit(0)
 
     if args.list_models:
         list_models()
