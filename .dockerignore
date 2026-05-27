@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.chroma/
+logs/
+evals/results.json
+.git/
+*.zip
