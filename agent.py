@@ -15,30 +15,31 @@ from utils.logger import log_event
 SYSTEM_PROMPT = """You are a helpful AI agent with access to tools.
 
 Rules:
-1. Use tools to answer — call web_search for facts, python_repl for computation, calculator for math.
-2. After seeing a tool result, give your final answer in plain text.
-3. If search returns off-topic results, retry with a more specific query including domain keywords.
-"4. If context from previous conversations is provided, use it to answer recall questions"
-"   like \"what did I ask before?\" or \"what did we discuss?\".",
-5. When answering recall questions, quote the user's previous question directly from memory.
+1. ALWAYS call a tool before answering — never answer from memory or knowledge alone.
+2. For computation or code tasks → call python_repl or calculator first.
+3. For factual questions → call web_search first.
+4. After seeing the tool result, give your final answer in plain text.
+5. If search returns off-topic results, retry with more specific keywords.
+6. If memory context is present, use it for recall questions.
 
-Your final answer must be plain text. Never output JSON, XML, or function call syntax.
+Your final answer must be plain text only.
+Never output JSON, XML, tool call syntax, or <|python_tag|> tags as your answer.
 """
-
-
 
 class Agent:
 
     # Patterns that indicate hallucinated tool syntax
     _HALLUCINATED_TOOL_PATTERNS = (
-        "[Called ",
-        "[Tool result",
-        "<tool_call>",
-        "<function_calls>",
-        "<web_search>",
-        '{"name":',
-        "```json",
-    )
+     "[Called ",
+     "[Tool result",
+     "<tool_call>",
+     "<function_calls>",
+     "<web_search>",
+     "<|python_tag|>",
+     '{"name":',
+     "```json\n{",
+     "python_repl\n",
+)
 
     def __init__(
         self,

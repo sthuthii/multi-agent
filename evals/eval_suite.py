@@ -35,8 +35,8 @@ SINGLE_AGENT_GOALS = [
                "must_contain": ["42"]},
     {"id": 2,  "goal": "Write Python to check if 97 is prime and print the result.",
                "must_contain": ["prime"]},
-    {"id": 3,  "goal": "Generate the first 10 Fibonacci numbers using Python.",
-               "must_contain": ["55"]},
+    {"id": 3,  "goal": "Use python_repl to write and run Python code that generates and prints the first 10 Fibonacci numbers.",
+                "must_contain": ["34"]},
     {"id": 4,  "goal": "How many days are in 17 weeks? Use the calculator.",
                "must_contain": ["119"]},
     {"id": 5,  "goal": "Use Python to reverse the string 'intelligence' and print it.",
@@ -57,16 +57,19 @@ SINGLE_AGENT_GOALS = [
     # Error resilience
     {"id": 11, "goal": "Run this broken code and tell me the error: x = 1 / 0",
                "must_contain": ["zerodivision"]},
-    {"id": 12, "goal": "Run this and tell me the error: print('hello'",
-               "must_contain": ["syntaxerror", "eof", "parenthes"]},
-    {"id": 13, "goal": "Try to import 'nonexistentlib999' and tell me what happens.",
-               "must_contain": ["modulenotfounderror", "no module"]},
+    {"id": 12,"goal": "Use python_repl to run this code and tell me the exact error type: print('hello'",
+                "must_contain": ["syntaxerror"]},
+    {"id": 13,
+ "goal": "Use python_repl to run: import nonexistentlib999 — tell me the exact Python exception class name.",
+ "must_contain": ["modulenotfounderror"]},
 
     # Multi-step
-    {"id": 14, "goal": "Search for what FAISS is, then write Python to create a simple list and sort it.",
-               "must_contain": ["faiss"]},
-    {"id": 15, "goal": "What is gradient descent? Explain in 2 sentences.",
-               "must_contain": ["gradient", "loss"]},
+    {"id": 14,
+ "goal": "Use web_search to find what FAISS stands for and what company made it.",
+ "must_contain": ["facebook", "meta", "similarity"]},
+    {"id": 15,
+ "goal": "What is gradient descent in machine learning? Explain in 2 sentences.",
+ "must_contain": ["gradient", "optim"]},
 ]
 
 ORCHESTRATOR_GOALS = [
