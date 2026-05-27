@@ -1,91 +1,116 @@
-# Multi-Agent System — Phase 1: Single Agent Foundation
+# Multi-Agent AI System
 
-A clean, from-scratch ReAct agent with tools, memory, structured logging, and a full eval suite.
-Built as Phase 1 of a multi-phase multi-agent system project.
+A production-grade multi-agent system built from scratch — no AutoGen, no CrewAI.
 
-## Project structure
+## Architecture
 
 ```
-multi_agent_phase1/
-├── main.py              # Entry point — CLI runner
-├── agent.py             # Core Agent class (plan → act → observe → reflect)
-├── llm.py               # LLM wrapper (OpenAI + Ollama)
-├── tools/
-│   ├── base.py          # BaseTool abstract class
-│   ├── python_repl.py   # Safe Python execution via subprocess
-│   └── web_search.py    # DuckDuckGo / Tavily search
-├── memory/
-│   └── buffer.py        # Rolling conversation buffer
-├── utils/
-│   └── logger.py        # Structured JSON-lines trace logger
-├── tests/
-│   ├── test_tools.py    # Tool unit tests (offline)
-│   ├── test_memory.py   # Memory unit tests (offline)
-│   └── test_agent.py    # Agent integration tests (mock LLM)
-├── evals/
-│   └── eval_suite.py    # 20-goal eval suite (real LLM)
-├── logs/                # trace.jsonl written here
-├── .env.example
-├── requirements.txt
-└── Makefile
+User Goal
+    ↓
+Orchestrator  (decomposes → routes → tracks)
+    ↓              ↓               ↓
+Researcher      Coder          Writer
+(web search)  (REPL + files)  (synthesis)
+    ↓
+Critic  (scores 1-10, triggers reruns if < 7)
+    ↓
+Final Output + Trace Log
 ```
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| LLM | Groq (free) / Ollama (local) / OpenAI |
+| Agent framework | Custom from scratch |
+| Tools | Web search, Python REPL, Calculator, File write |
+| Long-term memory | ChromaDB + sentence-transformers |
+| API | FastAPI |
+| UI | Gradio |
+| Testing | pytest (35+ tests) |
 
 ## Quick start
 
 ```bash
-# 1. Install dependencies
+# 1. Install
 pip install -r requirements.txt
 
-# 2. Set your API key
+# 2. Set API key
 cp .env.example .env
-# Edit .env and add OPENAI_API_KEY=sk-...
+# Add GROQ_API_KEY=gsk_... (free at console.groq.com)
 
-# 3. Run with default eval goals
-python main.py
+# 3. Run single agent
+python main.py --goal "What is gradient descent?"
 
-# 4. Run with your own goal
-python main.py --goal "Search for what RLHF is and summarise it"
+# 4. Run orchestrator
+python main.py --orchestrator --model llama-3.3-70b-versatile \
+  --goal "Research RAG and write a Python implementation"
 
-# 5. Use Ollama locally
-ollama pull mistral
-python main.py --provider ollama --model mistral --goal "What is 17 * 43?"
+# 5. Launch UI
+python ui/app.py
+# Open http://localhost:7860
+
+# 6. Run API
+uvicorn api.server:app --reload --port 8000
+# Open http://localhost:8000/docs
+
+# 7. Run tests
+pytest tests/ -v
+
+# 8. Run evals
+python evals/eval_suite.py --mode single --model llama-3.1-8b-instant
 ```
 
-## CLI options
+## CLI flags
 
-| Flag | Default | Description |
-|---|---|---|
-| `--goal` | None | Custom goal; runs default suite if omitted |
-| `--provider` | openai | `openai` or `ollama` |
-| `--model` | gpt-4o-mini | Any model name |
-| `--max-iter` | 10 | Max iterations per goal |
-| `--no-search` | False | Disable web search tool |
-| `--no-repl` | False | Disable Python REPL tool |
-| `--save-trace` | False | Write trace to `logs/trace.jsonl` |
-| `--quiet` | False | Suppress per-iteration logs |
+| Flag | Description |
+|---|---|
+| `--goal` | Goal for the agent |
+| `--orchestrator` | Use multi-agent mode |
+| `--provider` | groq / openai / ollama |
+| `--model` | Model name |
+| `--agent-model` | Sub-agent model (orchestrator) |
+| `--memory` | Enable long-term memory |
+| `--save-trace` | Write trace to logs/trace.jsonl |
+| `--trace` | Replay all run traces |
+| `--critic-threshold` | Min score to accept (default: 7) |
+| `--max-retries` | Critic retry attempts (default: 2) |
 
-## Run tests
+## Eval results
 
-```bash
-# Unit + integration tests (no LLM, no API key needed)
-make test
-
-# Full eval suite (requires API key, costs ~$0.05 with gpt-4o-mini)
-make eval
+```
+Single-agent (llama-3.1-8b-instant, 15 goals):
+  Auto-graded : 14/14 (100%)
+  Crash rate  : 0%
+  Avg latency : 21.7s/goal
+  Avg iters   : 2.1
 ```
 
-## Phase 1 definition of done
+## Deploy to HuggingFace Spaces
 
-- [ ] Completes a 3-step task without crashing
-- [ ] Tool error doesn't kill the loop
-- [ ] Max iteration cap fires correctly
-- [ ] Buffer doesn't overflow on long runs
-- [ ] Logs are readable in `logs/trace.jsonl`
-- [ ] Eval suite: ≥16/17 auto-graded goals pass
+1. Create a new Space → SDK: Gradio
+2. Push this repo to the Space
+3. Add `GROQ_API_KEY` in Space Settings → Secrets
+4. App goes live at `huggingface.co/spaces/yourusername/multi-agent`
 
-## What's coming in Phase 2
+## Project structure
 
-- Long-term memory with ChromaDB
-- Additional tools (file I/O, calculator)
-- Orchestrator agent
-- Specialist agents (Researcher, Coder, Writer)
+```
+multi_agent/
+├── main.py              # CLI entry point
+├── agent.py             # Core ReAct loop
+├── orchestrator.py      # Multi-agent coordinator
+├── llm.py               # LLM wrapper (Groq/OpenAI/Ollama)
+├── agents/
+│   ├── researcher.py    # Web search specialist
+│   ├── coder.py         # Code execution specialist
+│   ├── writer.py        # Synthesis specialist
+│   └── critic.py        # Quality evaluator + retry trigger
+├── tools/               # Calculator, REPL, search, file write
+├── memory/              # ChromaDB long-term memory
+├── observability/       # Trace replay + analytics
+├── api/                 # FastAPI backend
+├── ui/                  # Gradio frontend
+├── tests/               # 35+ unit + integration tests
+└── evals/               # 20-goal eval suite
+```
